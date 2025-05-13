@@ -6,6 +6,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/edsrzf/mmap-go"
 )
 
 type WALEntry struct {
@@ -32,23 +34,37 @@ func (e *WALEntry) Encode() []byte {
 }
 
 type WAL struct {
-	mu      sync.Mutex
-	file    *os.File
-	writer  *bufio.Writer
-	entries chan *WALEntry
-	wg      sync.WaitGroup
+	mu          sync.Mutex
+	file        *os.File
+	mmappedData *mmap.MMap
+	offset      int
+	writer      *bufio.Writer
+	entries     chan *WALEntry
+	wg          sync.WaitGroup
 }
 
 func NewWAL(path string) (*WAL, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	const mmapSize = 100 << 20 // 100MB
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
 
+	if err := f.Truncate(int64(mmapSize)); err != nil {
+		panic(err)
+	}
+
+	mmappedData, err := mmap.Map(f, mmap.RDWR, 0)
+	if err != nil {
+		panic(err)
+	}
+
 	wal := &WAL{
-		file:    f,
-		writer:  bufio.NewWriterSize(f, 4*1024), // 4KB buffer
-		entries: make(chan *WALEntry, 1000),
+		file:        f,
+		writer:      bufio.NewWriterSize(f, 4*1024), // 4KB buffer
+		entries:     make(chan *WALEntry, 1000),
+		mmappedData: &mmappedData,
+		offset:      0,
 	}
 
 	wal.wg.Add(1)
@@ -110,10 +126,17 @@ func (wal *WAL) flushBatch(batch []*WALEntry) {
 
 	for _, entry := range batch {
 		data := entry.Encode()
-		wal.writer.Write(data)
+
+		copy((*wal.mmappedData)[wal.offset:], data)
+		wal.offset += len(data)
+		//wal.writer.Write(data)
 	}
-	wal.writer.Flush()
-	wal.file.Sync()
+	//wal.writer.Flush()
+	//wal.file.Sync()
+
+	if err := (*wal.mmappedData).Flush(); err != nil {
+		panic(err)
+	}
 
 	for _, entry := range batch {
 		entry.done <- nil
@@ -124,6 +147,10 @@ func (wal *WAL) Close() error {
 	close(wal.entries)
 	wal.wg.Wait()
 
+	if err := (*wal.mmappedData).Flush(); err != nil {
+		panic(err)
+	}
+	wal.mmappedData.Unmap()
 	wal.writer.Flush()
 	wal.file.Sync()
 	return wal.file.Close()
