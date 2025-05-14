@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -10,36 +12,46 @@ import (
 )
 
 func TestAdd(t *testing.T) {
-	wal, err := NewWAL("test.db")
+	wal, err := NewWAL(".")
 	assert.NoError(t, err)
-	wal.Append("key1", []byte("value"))
-	wal.Close()
-	//assert.Equal(t, 5, Add(2, 3))
+	err = wal.Append("key1", []byte("value"))
+	assert.NoError(t, err)
+	err = wal.Close()
+	assert.NoError(t, err)
 
 	removeFile()
 }
 
 func BenchmarkAdd(b *testing.B) {
-	wal, err := NewWAL("test.db")
+	wal, err := NewWAL(".")
 	var wg sync.WaitGroup
 	assert.NoError(b, err)
 	for i := range 100000 {
 		wg.Add(1)
 		go func() {
-			wal.Append(fmt.Sprintf("key%d", i), []byte("value"))
+			err = wal.Append(fmt.Sprintf("key%d", i), []byte("value"))
+			assert.NoError(b, err)
 			wg.Done()
 		}()
 	}
 	wg.Wait()
-	wal.Close()
+	err = wal.Close()
+	assert.NoError(b, err)
 	removeFile()
 }
 
 func removeFile() {
-	err := os.Remove("test.db")
+	matches, err := filepath.Glob("wal_*.db")
 	if err != nil {
-		fmt.Println("Error deleting file:", err)
-	} else {
-		fmt.Println("File deleted successfully")
+		log.Printf("Error finding files: %s", err.Error())
+	}
+
+	for _, file := range matches {
+		err := os.Remove(file)
+		if err != nil {
+			log.Printf("Failed to remove file %s: %v", file, err)
+		} else {
+			log.Printf("Removed file %s", file)
+		}
 	}
 }
