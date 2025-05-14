@@ -12,6 +12,7 @@ import (
 )
 
 const mmapSize = 1 << 20 // 100MB
+const flushInterval = 10 * time.Millisecond
 
 type WALEntry struct {
 	Timestamp int64
@@ -54,7 +55,7 @@ type WalSegment struct {
 func NewWAL(path string) (*WAL, error) {
 	segment, err := newWalSegment(path, 0)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	wal := &WAL{
@@ -83,7 +84,7 @@ func newWalSegment(folder string, index int) (*WalSegment, error) {
 
 	mmappedData, err := mmap.Map(f, mmap.RDWR, 0)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	segment := &WalSegment{
@@ -112,8 +113,8 @@ func (wal *WAL) writeLoop() {
 
 	batch := make([]*WALEntry, 0, 100)
 
-	flushInterval := time.NewTicker(10 * time.Millisecond)
-	defer flushInterval.Stop()
+	flushTicker := time.NewTicker(flushInterval)
+	defer flushTicker.Stop()
 
 	for {
 		select {
@@ -128,7 +129,7 @@ func (wal *WAL) writeLoop() {
 				batch = batch[:0]
 			}
 
-		case <-flushInterval.C:
+		case <-flushTicker.C:
 			if len(batch) > 0 {
 				wal.flushBatch(batch)
 				batch = batch[:0]
