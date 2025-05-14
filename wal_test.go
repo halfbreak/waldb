@@ -11,7 +11,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAdd(t *testing.T) {
+func TestWAL_CreateError(t *testing.T) {
+	_, err := NewWAL("notExistentFolder")
+	assert.Error(t, err)
+}
+
+func TestWAL_Append(t *testing.T) {
 	wal, err := NewWAL(".")
 	assert.NoError(t, err)
 	err = wal.Append("key1", []byte("value"))
