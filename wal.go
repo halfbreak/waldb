@@ -1,14 +1,17 @@
 package main
 
 import (
-	"bufio"
 	"encoding/binary"
+	"fmt"
+	"log"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/edsrzf/mmap-go"
 )
+
+const mmapSize = 1 << 20 // 100MB
 
 type WALEntry struct {
 	Timestamp int64
@@ -34,18 +37,42 @@ func (e *WALEntry) Encode() []byte {
 }
 
 type WAL struct {
-	mu          sync.Mutex
+	mu      sync.Mutex
+	segment *WalSegment
+	index   int
+	wg      sync.WaitGroup
+	folder  string
+	entries chan *WALEntry
+}
+
+type WalSegment struct {
 	file        *os.File
 	mmappedData *mmap.MMap
 	offset      int
-	writer      *bufio.Writer
-	entries     chan *WALEntry
-	wg          sync.WaitGroup
 }
 
 func NewWAL(path string) (*WAL, error) {
-	const mmapSize = 100 << 20 // 100MB
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+	segment, err := newWalSegment(path, 0)
+	if err != nil {
+		panic(err)
+	}
+
+	wal := &WAL{
+		segment: segment,
+		index:   0,
+		folder:  path,
+		entries: make(chan *WALEntry, 1000),
+	}
+
+	wal.wg.Add(1)
+	go wal.writeLoop()
+
+	return wal, nil
+}
+
+func newWalSegment(folder string, index int) (*WalSegment, error) {
+	fileName := fmt.Sprintf("%s/wal_%d.db", folder, index)
+	f, err := os.OpenFile(fileName, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -59,18 +86,12 @@ func NewWAL(path string) (*WAL, error) {
 		panic(err)
 	}
 
-	wal := &WAL{
+	segment := &WalSegment{
 		file:        f,
-		writer:      bufio.NewWriterSize(f, 4*1024), // 4KB buffer
-		entries:     make(chan *WALEntry, 1000),
 		mmappedData: &mmappedData,
 		offset:      0,
 	}
-
-	wal.wg.Add(1)
-	go wal.writeLoop()
-
-	return wal, nil
+	return segment, nil
 }
 
 func (wal *WAL) Append(key string, value []byte) error {
@@ -101,8 +122,6 @@ func (wal *WAL) writeLoop() {
 				wal.flushBatch(batch)
 				return
 			}
-
-			//log.Println("Adding entries to batch")
 			batch = append(batch, entry)
 			if len(batch) >= 100 {
 				wal.flushBatch(batch)
@@ -110,7 +129,6 @@ func (wal *WAL) writeLoop() {
 			}
 
 		case <-flushInterval.C:
-			//log.Println("Triggered timer")
 			if len(batch) > 0 {
 				wal.flushBatch(batch)
 				batch = batch[:0]
@@ -120,21 +138,35 @@ func (wal *WAL) writeLoop() {
 }
 
 func (wal *WAL) flushBatch(batch []*WALEntry) {
-	//log.Println("Flushing")
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
 
 	for _, entry := range batch {
 		data := entry.Encode()
 
-		copy((*wal.mmappedData)[wal.offset:], data)
-		wal.offset += len(data)
-		//wal.writer.Write(data)
-	}
-	//wal.writer.Flush()
-	//wal.file.Sync()
+		if wal.segment.offset+len(data) > mmapSize {
+			log.Println("Rolling to a new file.")
 
-	if err := (*wal.mmappedData).Flush(); err != nil {
+			if err := (*wal.segment.mmappedData).Flush(); err != nil {
+				panic(err)
+			}
+			if err := wal.segment.mmappedData.Unmap(); err != nil {
+				panic(err)
+			}
+
+			wal.index = wal.index + 1
+			newSegment, err := newWalSegment(wal.folder, wal.index)
+			if err != nil {
+				panic(err)
+			}
+			wal.segment = newSegment
+		}
+
+		copy((*wal.segment.mmappedData)[wal.segment.offset:], data)
+		wal.segment.offset += len(data)
+	}
+
+	if err := (*wal.segment.mmappedData).Flush(); err != nil {
 		panic(err)
 	}
 
@@ -147,11 +179,11 @@ func (wal *WAL) Close() error {
 	close(wal.entries)
 	wal.wg.Wait()
 
-	if err := (*wal.mmappedData).Flush(); err != nil {
+	if err := (*wal.segment.mmappedData).Flush(); err != nil {
 		panic(err)
 	}
-	wal.mmappedData.Unmap()
-	wal.writer.Flush()
-	wal.file.Sync()
-	return wal.file.Close()
+	if err := wal.segment.mmappedData.Unmap(); err != nil {
+		panic(err)
+	}
+	return wal.segment.file.Close()
 }
