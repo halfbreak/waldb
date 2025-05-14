@@ -18,6 +18,7 @@
 # vendor/
 postgres-data/
 tmp/
+.idea/
 
 # Go workspace file
 go.work
