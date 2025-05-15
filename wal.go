@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-const mmapSize = 1 << 20 // 100MB
 const flushInterval = 10 * time.Millisecond
 
 type WALEntry struct {
@@ -43,7 +42,7 @@ type WAL struct {
 }
 
 func NewWAL(path string) (*WAL, error) {
-	segment, err := newWalSegment(path, 0)
+	segment, err := NewWalSegment(path, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +59,6 @@ func NewWAL(path string) (*WAL, error) {
 
 	return wal, nil
 }
-
 
 func (wal *WAL) Append(key string, value []byte) error {
 	done := make(chan error, 1)
@@ -112,29 +110,14 @@ func (wal *WAL) flushBatch(batch []*WALEntry) {
 	for _, entry := range batch {
 		data := entry.Encode()
 
-		if wal.segment.offset+len(data) > mmapSize {
-			log.Println("Rolling to a new file.")
-
-			if err := (*wal.segment.mmappedData).Flush(); err != nil {
-				panic(err)
-			}
-			if err := wal.segment.mmappedData.Unmap(); err != nil {
-				panic(err)
-			}
-
-			wal.index = wal.index + 1
-			newSegment, err := newWalSegment(wal.folder, wal.index)
-			if err != nil {
-				panic(err)
-			}
-			wal.segment = newSegment
+		if wal.segment.IsFull(data) {
+			wal.rollToNewSegment()
 		}
 
-		copy((*wal.segment.mmappedData)[wal.segment.offset:], data)
-		wal.segment.offset += len(data)
+		wal.segment.Append(data)
 	}
 
-	if err := (*wal.segment.mmappedData).Flush(); err != nil {
+	if err := wal.segment.Flush(); err != nil {
 		panic(err)
 	}
 
@@ -143,15 +126,25 @@ func (wal *WAL) flushBatch(batch []*WALEntry) {
 	}
 }
 
+func (wal *WAL) rollToNewSegment() {
+	log.Println("Rolling to a new segment.")
+
+	err := wal.segment.Close()
+	if err != nil {
+		panic(err)
+	}
+
+	wal.index = wal.index + 1
+	newSegment, err := NewWalSegment(wal.folder, wal.index)
+	if err != nil {
+		panic(err)
+	}
+	wal.segment = newSegment
+}
+
 func (wal *WAL) Close() error {
 	close(wal.entries)
 	wal.wg.Wait()
 
-	if err := (*wal.segment.mmappedData).Flush(); err != nil {
-		panic(err)
-	}
-	if err := wal.segment.mmappedData.Unmap(); err != nil {
-		panic(err)
-	}
-	return wal.segment.file.Close()
+	return wal.segment.Close()
 }
