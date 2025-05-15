@@ -6,13 +6,15 @@ import (
 	"os"
 )
 
+const mmapSize = 1 << 20 // 100MB
+
 type WalSegment struct {
 	file        *os.File
 	mmappedData *mmap.MMap
 	offset      int
 }
 
-func newWalSegment(folder string, index int) (*WalSegment, error) {
+func NewWalSegment(folder string, index int) (*WalSegment, error) {
 	fileName := fmt.Sprintf("%s/wal_%d.db", folder, index)
 	f, err := os.OpenFile(fileName, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
@@ -34,4 +36,27 @@ func newWalSegment(folder string, index int) (*WalSegment, error) {
 		offset:      0,
 	}
 	return segment, nil
+}
+
+func (segment *WalSegment) Append(data []byte) {
+	copy((*segment.mmappedData)[segment.offset:], data)
+	segment.offset += len(data)
+}
+
+func (segment *WalSegment) IsFull(data []byte) bool {
+	return segment.offset+len(data) > mmapSize
+}
+
+func (segment *WalSegment) Flush() error {
+	return (segment.mmappedData).Flush()
+}
+
+func (segment *WalSegment) Close() error {
+	if err := (segment.mmappedData).Flush(); err != nil {
+		return err
+	}
+	if err := segment.mmappedData.Unmap(); err != nil {
+		return err
+	}
+	return segment.file.Close()
 }
