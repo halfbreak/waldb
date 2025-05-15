@@ -2,13 +2,9 @@ package main
 
 import (
 	"encoding/binary"
-	"fmt"
 	"log"
-	"os"
 	"sync"
 	"time"
-
-	"github.com/edsrzf/mmap-go"
 )
 
 const mmapSize = 1 << 20 // 100MB
@@ -46,12 +42,6 @@ type WAL struct {
 	entries chan *WALEntry
 }
 
-type WalSegment struct {
-	file        *os.File
-	mmappedData *mmap.MMap
-	offset      int
-}
-
 func NewWAL(path string) (*WAL, error) {
 	segment, err := newWalSegment(path, 0)
 	if err != nil {
@@ -71,29 +61,6 @@ func NewWAL(path string) (*WAL, error) {
 	return wal, nil
 }
 
-func newWalSegment(folder string, index int) (*WalSegment, error) {
-	fileName := fmt.Sprintf("%s/wal_%d.db", folder, index)
-	f, err := os.OpenFile(fileName, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := f.Truncate(int64(mmapSize)); err != nil {
-		panic(err)
-	}
-
-	mmappedData, err := mmap.Map(f, mmap.RDWR, 0)
-	if err != nil {
-		return nil, err
-	}
-
-	segment := &WalSegment{
-		file:        f,
-		mmappedData: &mmappedData,
-		offset:      0,
-	}
-	return segment, nil
-}
 
 func (wal *WAL) Append(key string, value []byte) error {
 	done := make(chan error, 1)
