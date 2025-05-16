@@ -1,6 +1,9 @@
 package main
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"errors"
+)
 
 type WALEntry struct {
 	Timestamp int64
@@ -23,4 +26,39 @@ func (e *WALEntry) Encode() []byte {
 	copy(buf[16+keyLen:], e.Value)
 
 	return buf
+}
+
+func Decode(data []byte) (*WALEntry, error) {
+	if len(data) < 16 {
+		return nil, errors.New("data too short to contain header")
+	}
+
+	ts := int64(binary.BigEndian.Uint64(data[0:8]))
+	keyLen := binary.BigEndian.Uint32(data[8:12])
+
+	keyStart := 12
+	keyEnd := keyStart + int(keyLen)
+
+	if len(data) < keyEnd+4 {
+		return nil, errors.New("data too short to contain key + value length")
+	}
+
+	key := string(data[keyStart:keyEnd])
+	valLen := binary.BigEndian.Uint32(data[keyEnd : keyEnd+4])
+
+	valStart := keyEnd + 4
+	valEnd := valStart + int(valLen)
+
+	if len(data) < valEnd {
+		return nil, errors.New("data too short to contain full value")
+	}
+
+	value := make([]byte, valLen)
+	copy(value, data[valStart:valEnd])
+
+	return &WALEntry{
+		Timestamp: ts,
+		Key:       key,
+		Value:     value,
+	}, nil
 }
