@@ -2,8 +2,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/edsrzf/mmap-go"
 	"os"
+
+	"github.com/edsrzf/mmap-go"
 )
 
 const mmapSize = 1 << 20 // 100MB
