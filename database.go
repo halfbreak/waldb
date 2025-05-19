@@ -4,11 +4,13 @@ import (
 	"errors"
 	"sync"
 
+	"halfbreak/waldb/wal"
+
 	"github.com/magiconair/properties"
 )
 
 type KeyValueStore struct {
-	wal   *WAL
+	wal   *wal.WAL
 	cache *map[string][]byte
 	mu    sync.Mutex
 }
@@ -18,7 +20,7 @@ func NewKVS() (*KeyValueStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	wal, err := NewWAL(props["wal.file.location"])
+	wal, err := wal.NewWAL(props["wal.file.location"])
 	if err != nil {
 		return nil, err
 	}
