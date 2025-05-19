@@ -1,4 +1,4 @@
-package wal
+package wal_test
 
 import (
 	"fmt"
@@ -8,16 +8,18 @@ import (
 	"sync"
 	"testing"
 
+	"halfbreak/waldb/wal"
+
 	"github.com/stretchr/testify/assert"
 )
 
 func TestWAL_CreateError(t *testing.T) {
-	_, err := NewWAL("notExistentFolder")
+	_, err := wal.NewWAL("notExistentFolder")
 	assert.Error(t, err)
 }
 
 func TestWAL_Append(t *testing.T) {
-	wal, err := NewWAL(".")
+	wal, err := wal.NewWAL(".")
 	assert.NoError(t, err)
 	err = wal.Append("key1", []byte("value"))
 	assert.NoError(t, err)
@@ -28,7 +30,7 @@ func TestWAL_Append(t *testing.T) {
 }
 
 func BenchmarkAdd(b *testing.B) {
-	wal, err := NewWAL(".")
+	wal, err := wal.NewWAL(".")
 	var wg sync.WaitGroup
 	assert.NoError(b, err)
 	for i := range 100000 {
