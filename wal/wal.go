@@ -1,7 +1,12 @@
 package wal
 
 import (
+	"bufio"
+	"fmt"
+	"io"
 	"log"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -9,12 +14,14 @@ import (
 const flushInterval = 10 * time.Millisecond
 
 type WAL struct {
-	mu      sync.Mutex
-	segment *WalSegment
-	index   int
-	wg      sync.WaitGroup
-	folder  string
-	entries chan *WALEntry
+	mu         sync.Mutex
+	segment    *WalSegment
+	index      int
+	wg         sync.WaitGroup
+	folder     string
+	entries    chan *WALEntry
+	metaFile   *os.File
+	metaWriter *bufio.Writer
 }
 
 func NewWAL(path string) (*WAL, error) {
@@ -23,11 +30,47 @@ func NewWAL(path string) (*WAL, error) {
 		return nil, err
 	}
 
+	_, err = os.Stat(fmt.Sprintf("%s/wal.meta", path))
+	fileDoesNotExist := err != nil && os.IsNotExist(err)
+
+	var index int
+	if fileDoesNotExist {
+		index = 0
+	} else {
+		f, err := os.OpenFile(fmt.Sprintf("%s/wal.meta", path), os.O_RDONLY, 0644)
+		if err != nil {
+			return nil, err
+		}
+
+		data, err := io.ReadAll(f)
+		if err != nil {
+			return nil, err
+		}
+
+		i, err := strconv.Atoi(string(data))
+		if err != nil {
+			panic(err)
+		}
+		index = i
+	}
+
+	f, err := os.OpenFile(fmt.Sprintf("%s/wal.meta", path), os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
+	if err != nil {
+		return nil, err
+	}
+
 	wal := &WAL{
-		segment: segment,
-		index:   0,
-		folder:  path,
-		entries: make(chan *WALEntry, 1000),
+		segment:    segment,
+		index:      index,
+		folder:     path,
+		entries:    make(chan *WALEntry, 1000),
+		metaFile:   f,
+		metaWriter: bufio.NewWriterSize(f, 4*1024), // 4KB buffer
+	}
+
+	err = wal.writeMetadata()
+	if err != nil {
+		panic(err)
 	}
 
 	wal.wg.Add(1)
@@ -116,11 +159,23 @@ func (wal *WAL) rollToNewSegment() {
 		panic(err)
 	}
 	wal.segment = newSegment
+	err = wal.writeMetadata()
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (wal *WAL) writeMetadata() error {
+	_, err := wal.metaFile.WriteString(fmt.Sprintf("%d", wal.index))
+	return err
 }
 
 func (wal *WAL) Close() error {
 	close(wal.entries)
 	wal.wg.Wait()
+
+	wal.metaFile.Sync()
+	wal.metaFile.Close()
 
 	return wal.segment.Close()
 }
