@@ -37,17 +37,7 @@ func NewWAL(path string) (*WAL, error) {
 	if fileDoesNotExist {
 		index = 0
 	} else {
-		f, err := os.OpenFile(fmt.Sprintf("%s/wal.meta", path), os.O_RDONLY, 0644)
-		if err != nil {
-			return nil, err
-		}
-
-		data, err := io.ReadAll(f)
-		if err != nil {
-			return nil, err
-		}
-
-		i, err := strconv.Atoi(string(data))
+		i, err := fetchIndex(path)
 		if err != nil {
 			panic(err)
 		}
@@ -168,6 +158,24 @@ func (wal *WAL) rollToNewSegment() {
 func (wal *WAL) writeMetadata() error {
 	_, err := wal.metaFile.WriteString(fmt.Sprintf("%d", wal.index))
 	return err
+}
+
+func fetchIndex(path string) (int, error) {
+	f, err := os.OpenFile(fmt.Sprintf("%s/wal.meta", path), os.O_RDONLY, 0644)
+	if err != nil {
+		return 0, err
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return 0, err
+	}
+
+	i, err := strconv.Atoi(string(data))
+	if err != nil {
+		panic(err)
+	}
+	return i, nil
 }
 
 func (wal *WAL) Close() error {
