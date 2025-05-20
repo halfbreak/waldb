@@ -1,12 +1,7 @@
 package wal
 
 import (
-	"bufio"
-	"fmt"
-	"io"
 	"log"
-	"os"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -14,14 +9,12 @@ import (
 const flushInterval = 10 * time.Millisecond
 
 type WAL struct {
-	mu         sync.Mutex
-	segment    *WalSegment
-	index      int
-	wg         sync.WaitGroup
-	folder     string
-	entries    chan *WALEntry
-	metaFile   *os.File
-	metaWriter *bufio.Writer
+	mu       sync.Mutex
+	segment  *WalSegment
+	wg       sync.WaitGroup
+	folder   string
+	entries  chan *WALEntry
+	metadata *WALMetadata
 }
 
 func NewWAL(path string) (*WAL, error) {
@@ -30,37 +23,21 @@ func NewWAL(path string) (*WAL, error) {
 		return nil, err
 	}
 
-	_, err = os.Stat(fmt.Sprintf("%s/wal.meta", path))
-	fileDoesNotExist := err != nil && os.IsNotExist(err)
-
-	var index int
-	if fileDoesNotExist {
-		index = 0
-	} else {
-		i, err := fetchIndex(path)
-		if err != nil {
-			panic(err)
-		}
-		index = i
-	}
-
-	f, err := os.OpenFile(fmt.Sprintf("%s/wal.meta", path), os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
+	metadata, err := OpenMetadata(path)
 	if err != nil {
 		return nil, err
 	}
 
 	wal := &WAL{
-		segment:    segment,
-		index:      index,
-		folder:     path,
-		entries:    make(chan *WALEntry, 1000),
-		metaFile:   f,
-		metaWriter: bufio.NewWriterSize(f, 4*1024), // 4KB buffer
+		segment:  segment,
+		folder:   path,
+		entries:  make(chan *WALEntry, 1000),
+		metadata: metadata,
 	}
 
-	err = wal.writeMetadata()
+	err = wal.metadata.WriteMetadata()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	wal.wg.Add(1)
@@ -143,47 +120,22 @@ func (wal *WAL) rollToNewSegment() {
 		panic(err)
 	}
 
-	wal.index = wal.index + 1
-	newSegment, err := NewWalSegment(wal.folder, wal.index)
+	wal.metadata.Index = wal.metadata.Index + 1
+	newSegment, err := NewWalSegment(wal.folder, wal.metadata.Index)
 	if err != nil {
 		panic(err)
 	}
 	wal.segment = newSegment
-	err = wal.writeMetadata()
+	err = wal.metadata.WriteMetadata()
 	if err != nil {
 		panic(err)
 	}
-}
-
-func (wal *WAL) writeMetadata() error {
-	_, err := wal.metaFile.WriteString(fmt.Sprintf("%d", wal.index))
-	return err
-}
-
-func fetchIndex(path string) (int, error) {
-	f, err := os.OpenFile(fmt.Sprintf("%s/wal.meta", path), os.O_RDONLY, 0644)
-	if err != nil {
-		return 0, err
-	}
-
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return 0, err
-	}
-
-	i, err := strconv.Atoi(string(data))
-	if err != nil {
-		panic(err)
-	}
-	return i, nil
 }
 
 func (wal *WAL) Close() error {
 	close(wal.entries)
 	wal.wg.Wait()
-
-	wal.metaFile.Sync()
-	wal.metaFile.Close()
+	wal.metadata.Close()
 
 	return wal.segment.Close()
 }

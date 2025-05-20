@@ -48,6 +48,9 @@ func (kv *KeyValueStore) Read(key string) ([]byte, error) {
 	}
 	return val, nil
 }
+func (kv *KeyValueStore) Close() {
+	kv.wal.Close()
+}
 
 func loadProperties(path string) (map[string]string, error) {
 	p, err := properties.LoadFile(path, properties.UTF8)

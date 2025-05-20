@@ -2,6 +2,7 @@ package main
 
 func main() {
 	db, err := NewKVS()
+	defer db.Close()
 	if err != nil {
 		panic(err)
 	}
